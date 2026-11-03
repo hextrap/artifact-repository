@@ -1,0 +1,152 @@
+# hextrap-artifacts: every setting, with its default.
+#
+#   hextrap-artifacts -config /etc/hextrap-artifacts/config.yaml
+#
+# For a quick start, use config.example.yaml instead. Only sign-in and
+# storage are required; everything else here is optional.
+#
+# Unknown keys are rejected at startup, so typos fail loudly. Keep secrets in
+# environment variables rather than this file:
+#
+#   HEXTRAP_OIDC_CLIENT_SECRET   OIDC client secret
+#   HEXTRAP_OIDC_COOKIE_SECRET   32+ random characters; required with database_url
+#   HEXTRAP_DATABASE_URL         Postgres URL, password URL-encoded
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY[, AWS_SESSION_TOKEN]
+#                                S3 credentials (not needed on ECS: the task role is used)
+
+# --- Server -----------------------------------------------------------------
+
+# Externally visible URL, used for download links and the OIDC redirect.
+# Optional with local users: links are then built from each request's host.
+public_url: https://repo.example.com
+
+listen: ":8080"
+
+# Serve TLS directly. Leave unset when a load balancer terminates TLS.
+# tls_cert: /etc/hextrap-artifacts/tls.crt
+# tls_key: /etc/hextrap-artifacts/tls.key
+
+# Take the client IP and scheme from X-Forwarded-For / X-Forwarded-Proto.
+# Enable only behind a load balancer that sets them.
+trust_proxy_headers: false
+
+# --- Sign-in: OIDC or local users, not both ---------------------------------
+
+# Single sign-on through your identity provider. Register
+# <public_url>/auth/callback as the redirect URI.
+oidc:
+  issuer: https://idp.example.com
+  client_id: hextrap-artifacts
+  # client_secret: use HEXTRAP_OIDC_CLIENT_SECRET
+  # cookie_secret: use HEXTRAP_OIDC_COOKIE_SECRET (generated at startup when
+  #   there's no database_url)
+  # redirect_url: defaults to <public_url>/auth/callback
+  # Add "groups" for Dex and Okta; Keycloak doesn't need it.
+  scopes: [openid, email, profile, groups]
+  # The ID token claim holding group names.
+  groups_claim: groups
+  # Instance admins (Admin on every repository), by IdP group or verified
+  # email. At least one is required.
+  admin_groups: [hextrap-admins]
+  admin_emails: []
+
+# Or local users, with password hashes from "hextrap-artifacts hash-password":
+#
+# users:
+#   - username: alice
+#     password_hash: "pbkdf2-sha256$600000$..."
+#   - username: bob
+#     password_hash: "pbkdf2-sha256$600000$..."
+# admins: [alice]
+
+# --- Storage ----------------------------------------------------------------
+
+# Package files: s3, or filesystem for testing. Exactly one.
+storage:
+  s3:
+    bucket: hextrap-artifacts
+    region: us-east-1
+    # Optional key prefix; must end in "/".
+    prefix: blobs/
+    # S3-compatible services (MinIO, Cloudflare R2, ...):
+    # endpoint: https://minio.internal:9000
+    # force_path_style: true
+    # Server-side encryption: AES256 or aws:kms.
+    server_side_encryption: AES256
+    # kms_key_id: arn:aws:kms:us-east-1:123456789012:key/...   # with aws:kms
+  # filesystem: /var/lib/hextrap-artifacts/blobs   # testing only
+
+# The IAM policy needs s3:GetObject, s3:PutObject and s3:DeleteObject on
+# <bucket>/<prefix>*, and s3:ListBucket on the bucket. Without ListBucket,
+# S3 returns 403 instead of 404 for missing objects and uploads fail.
+
+# Repository metadata and tokens. Without database_url they're files in
+# data_dir, for a single server. Use Postgres (prefer HEXTRAP_DATABASE_URL)
+# to run more than one replica.
+data_dir: /var/lib/hextrap-artifacts
+# database_url: postgres://hextrap_artifacts@db.internal:5432/hextrap_artifacts?sslmode=require
+
+# Storage quota in bytes. 0 means unlimited.
+storage_quota_bytes: 0
+
+# --- Proxy repositories -----------------------------------------------------
+
+# Registries that proxy repositories may cache from. Repository creators can
+# only choose from this list, so they can't point the server at other (for
+# example internal) addresses. An empty list disables proxy repositories.
+upstreams:
+  pypi: [https://pypi.org]
+  npm: [https://registry.npmjs.org]
+  maven: [https://repo.maven.apache.org/maven2]
+  cargo: [https://index.crates.io]
+  go: [https://proxy.golang.org]
+  # Go modules are checked against this checksum database before they are
+  # cached. Set to "" for an upstream that serves private modules.
+  go_checksum_db: https://sum.golang.org
+  # Container images. Others: https://ghcr.io, https://quay.io, https://public.ecr.aws
+  oci: [https://registry-1.docker.io]
+
+# --- hextrap firewall --------------------------------------------------------
+
+# Connect proxy repositories to your hextrap firewall (a paid hextrap
+# service). It applies your policy to every download: malware, typosquats,
+# soak time, allow and deny lists. Cached files are checked with it again
+# before they're served, and keep serving if it's unreachable. The names of
+# packages fetched through it are sent to hextrap; without this section,
+# nothing is. Use a credential from the firewall's Credentials tab.
+#
+# The firewall becomes the default upstream for PyPI, npm, Go and Cargo proxy
+# repositories; existing ones switch to it in their Settings tab. Maven and
+# container images aren't supported by the firewall yet.
+# hextrap_firewall:
+#   username: acme-ci
+#   password: ""        # or HEXTRAP_FIREWALL_PASSWORD
+#   # Defaults; override only for testing.
+#   urls:
+#     pypi: https://pypi.hextrap.com
+#     npm: https://npm.hextrap.com
+#     go: https://go.hextrap.com
+#     cargo: https://cargo.hextrap.com
+
+# --- Rate limiting ----------------------------------------------------------
+
+# Off by default. These are the defaults; tune them before enabling. Rates
+# are cost units per second; bursts are sized for large lockfile installs,
+# which are normal traffic. Sign-in attempts are always throttled separately.
+rate_limit:
+  enabled: false
+  tenant:
+    rate: 200
+    burst: 50000
+  # Fraction of the budget one user or token may use.
+  principal_share: 0.5
+  # Unauthenticated requests, per client IP.
+  anonymous:
+    rate: 5
+    burst: 200
+  costs:
+    read: 1           # index and metadata
+    download: 1       # package file
+    upstream_miss: 5  # extra, when a proxy repo fetches from upstream
+    publish: 10
+    auth: 5           # token creation and sign-in

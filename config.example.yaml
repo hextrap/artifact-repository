@@ -1,0 +1,20 @@
+# hextrap-artifacts: the minimal setup.
+#
+#   1. Create a password hash:   hextrap-artifacts hash-password
+#   2. Paste it below, then run: hextrap-artifacts -config config.yaml
+#   3. Sign in at http://localhost:8080, create an access token, and point
+#      npm or pip at the repository (the page shows how).
+#
+# Everything else has defaults. See config.full.example.yaml for all settings,
+# including single sign-on (OIDC) and Postgres.
+
+users:
+  - username: admin
+    password_hash: "PASTE THE OUTPUT OF: hextrap-artifacts hash-password"
+admins: [admin]
+
+data_dir: ./data
+storage:
+  # Local disk is for testing. For real use, store packages in S3:
+  #   s3: {bucket: my-artifacts, region: us-east-1}
+  filesystem: ./data/blobs
