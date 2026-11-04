@@ -91,6 +91,15 @@ func (p *Proxy) Cached(key string, force bool, fetch func() (any, error)) (any, 
 	return v, nil
 }
 
+// Stale returns the last value Cached stored under key, however old, for
+// serving while the upstream fails. Entries can still be evicted.
+func (p *Proxy) Stale(key string) (any, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.cache[key]
+	return e.value, ok
+}
+
 // Once runs fn for the first caller with key; concurrent callers with the
 // same key wait and get its result.
 func (p *Proxy) Once(key string, fn func() error) error {

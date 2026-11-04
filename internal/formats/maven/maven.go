@@ -376,6 +376,15 @@ type xmlMetadata struct {
 	ArtifactID string        `xml:"artifactId"`
 	Version    string        `xml:"version,omitempty"`
 	Versioning xmlVersioning `xml:"versioning"`
+	// Group-level metadata (e.g. org/apache/maven/plugins) lists plugins
+	// instead of versions; Maven resolves plugin prefixes from it.
+	Plugins []xmlPlugin `xml:"plugins>plugin,omitempty"`
+}
+
+type xmlPlugin struct {
+	Name       string `xml:"name,omitempty"`
+	Prefix     string `xml:"prefix"`
+	ArtifactID string `xml:"artifactId"`
 }
 
 func marshalMetadata(m xmlMetadata) ([]byte, error) {

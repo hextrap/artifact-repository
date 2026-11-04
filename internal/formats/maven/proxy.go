@@ -165,9 +165,19 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, p identi
 		writeError(w, err)
 		return
 	}
-	v, err := h.proxy.Cached("maven/"+repo.Tenant+"/"+repo.Name+"/"+mp.dir(), false, func() (any, error) {
+	key := "maven/" + repo.Tenant + "/" + repo.Name + "/" + mp.dir()
+	v, err := h.proxy.Cached(key, false, func() (any, error) {
 		return h.fetchMetadata(ctx, repo, mp)
 	})
+	if err != nil && !errors.Is(err, registry.ErrNotFound) {
+		// Central rate-limits (429) and has outages; the last copy it
+		// served beats metadata rebuilt from the cache, which has only
+		// cached versions and no plugin list.
+		if stale, ok := h.proxy.Stale(key); ok {
+			slog.Warn("upstream metadata unavailable; serving last upstream copy", "repo", repo.Name, "package", mp.pkg(), "err", err)
+			v, err = stale, nil
+		}
+	}
 	if err != nil {
 		if !errors.Is(err, registry.ErrNotFound) {
 			slog.Warn("upstream metadata unavailable; serving cached versions", "repo", repo.Name, "package", mp.pkg(), "err", err)

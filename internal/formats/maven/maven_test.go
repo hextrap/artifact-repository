@@ -278,17 +278,25 @@ type fakeCentral struct {
 	files map[string][]byte
 	evil  map[string][]byte
 	hits  sync.Map
+	// throttle, when set, is the status Central returns for everything
+	// (e.g. 429 when it rate-limits this IP).
+	throttle atomic.Int32
 }
 
 func newFakeCentral(t *testing.T) *fakeCentral {
 	c := &fakeCentral{files: map[string][]byte{
-		"/org/example/lib/1.0.0/lib-1.0.0.jar": []byte("LIB-JAR"),
-		"/org/example/lib/1.0.0/lib-1.0.0.pom": []byte("<project/>"),
-		"/org/example/lib/maven-metadata.xml":  []byte(`<metadata><groupId>org.example</groupId><artifactId>lib</artifactId><versioning><latest>1.0.0</latest><release>1.0.0</release><versions><version>0.9.0</version><version>1.0.0</version></versions></versioning></metadata>`),
+		"/org/example/lib/1.0.0/lib-1.0.0.jar":    []byte("LIB-JAR"),
+		"/org/example/lib/1.0.0/lib-1.0.0.pom":    []byte("<project/>"),
+		"/org/example/plugins/maven-metadata.xml": []byte(groupMetadata),
+		"/org/example/lib/maven-metadata.xml":     []byte(`<metadata><groupId>org.example</groupId><artifactId>lib</artifactId><versioning><latest>1.0.0</latest><release>1.0.0</release><versions><version>0.9.0</version><version>1.0.0</version></versions></versioning></metadata>`),
 	}, evil: map[string][]byte{}}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cnt, _ := c.hits.LoadOrStore(r.URL.Path, &atomic.Int32{})
 		cnt.(*atomic.Int32).Add(1)
+		if code := c.throttle.Load(); code != 0 {
+			w.WriteHeader(int(code))
+			return
+		}
 		path := r.URL.Path
 		for _, algo := range []string{"sha1", "sha256", "sha512", "md5"} {
 			if base, ok := strings.CutSuffix(path, "."+algo); ok {
@@ -394,6 +402,60 @@ func TestProxyServesCacheWhenCentralIsDown(t *testing.T) {
 	r.Equal([]string{"1.0.0"}, m.Versioning.Versions, "built from the cache")
 	code, _, _ = e.do("GET", "/maven/central/org/example/lib/1.0.0/lib-1.0.0.pom", "reader", nil)
 	r.Equal(http.StatusBadGateway, code)
+}
+
+// Group-level metadata is how Maven resolves a plugin prefix
+// (mvn dependency:tree -> maven-dependency-plugin). It lists plugins and has
+// no versions.
+const groupMetadata = `<metadata><plugins><plugin><name>Apache Maven Dependency Plugin</name><prefix>dependency</prefix><artifactId>maven-dependency-plugin</artifactId></plugin><plugin><name>Apache Maven Clean Plugin</name><prefix>clean</prefix><artifactId>maven-clean-plugin</artifactId></plugin></plugins></metadata>`
+
+func pluginPrefixes(t *testing.T, body string) map[string]string {
+	var m struct {
+		Plugins []struct {
+			Prefix     string `xml:"prefix"`
+			ArtifactID string `xml:"artifactId"`
+		} `xml:"plugins>plugin"`
+	}
+	require.NoError(t, xml.Unmarshal([]byte(body), &m))
+	out := map[string]string{}
+	for _, p := range m.Plugins {
+		out[p.Prefix] = p.ArtifactID
+	}
+	return out
+}
+
+const groupMetadataPath = "/maven/central/org/example/plugins/maven-metadata.xml"
+
+func TestProxyGroupMetadataKeepsPluginPrefixes(t *testing.T) {
+	r := require.New(t)
+	e := newEnv(t, newFakeCentral(t).srv.URL)
+
+	code, body, _ := e.do("GET", groupMetadataPath, "reader", nil)
+	r.Equal(200, code, body)
+	r.Equal(map[string]string{
+		"dependency": "maven-dependency-plugin",
+		"clean":      "maven-clean-plugin",
+	}, pluginPrefixes(t, body))
+}
+
+func TestProxyServesLastGoodMetadataWhileCentralThrottles(t *testing.T) {
+	r := require.New(t)
+	c := newFakeCentral(t)
+	e := newEnv(t, c.srv.URL)
+	e.metadata("/maven/central/org/example/lib/maven-metadata.xml", "reader")
+	e.do("GET", groupMetadataPath, "reader", nil)
+
+	c.throttle.Store(http.StatusTooManyRequests)
+	e.mu.Lock()
+	e.clock = e.clock.Add(upstream.IndexTTL + time.Second)
+	e.mu.Unlock()
+
+	// Nothing of lib is cached, so only the last upstream copy can answer.
+	m := e.metadata("/maven/central/org/example/lib/maven-metadata.xml", "reader")
+	r.Equal([]string{"0.9.0", "1.0.0"}, m.Versioning.Versions)
+	code, body, _ := e.do("GET", groupMetadataPath, "reader", nil)
+	r.Equal(200, code, body)
+	r.Equal("maven-dependency-plugin", pluginPrefixes(t, body)["dependency"])
 }
 
 func TestProxyGate(t *testing.T) {
