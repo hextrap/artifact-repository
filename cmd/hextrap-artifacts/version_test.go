@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"hextrap.io/artifacts/internal/edition"
+	"hextrap.io/artifacts/internal/upstream"
 )
 
 // The release build stamps the version in with -ldflags; -version must report
@@ -34,4 +35,10 @@ func TestVersionFlagReportsStampedVersion(t *testing.T) {
 
 func TestUnstampedBuildSaysDev(t *testing.T) {
 	require.Equal(t, "hextrap-artifacts dev ("+edition.Name+")", versionString())
+}
+
+// Upstream registries see the release version, so an operator (or Maven
+// Central's abuse team) can tell which build is calling.
+func TestUpstreamUserAgentCarriesTheVersion(t *testing.T) {
+	require.Equal(t, "hextrap-artifacts/"+version, upstream.UserAgent)
 }

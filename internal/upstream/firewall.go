@@ -82,6 +82,9 @@ func (p *Proxy) ViaFirewall(repo registry.Repo, src string) string {
 
 // authorize adds the firewall's credentials to a request bound for it.
 func (p *Proxy) authorize(req *http.Request) {
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", UserAgent)
+	}
 	if fw, ok := p.firewallFor(req.URL); ok && req.Header.Get("Authorization") == "" {
 		req.SetBasicAuth(fw.username, fw.password)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -171,4 +172,30 @@ func TestDoReturnsAnyStatus(t *testing.T) {
 	req, _ = http.NewRequest(http.MethodGet, "file:///etc/passwd", nil)
 	_, err = p.Do(req)
 	require.ErrorIs(t, err, registry.ErrUpstreamUnavailable)
+}
+
+// Maven Central throttles Go's default User-Agent (Go-http-client/1.1) with
+// 429s while answering other clients, so every upstream request names us.
+func TestRequestsIdentifyTheRepository(t *testing.T) {
+	r := require.New(t)
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		got = append(got, req.UserAgent())
+	}))
+	defer srv.Close()
+	p := New()
+	ctx := context.Background()
+
+	resp, err := p.Get(ctx, srv.URL, nil)
+	r.NoError(err)
+	resp.Body.Close()
+	_, err = p.Head(ctx, srv.URL)
+	r.NoError(err)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	resp, err = p.Do(req)
+	r.NoError(err)
+	resp.Body.Close()
+
+	r.Equal([]string{UserAgent, UserAgent, UserAgent}, got)
+	r.True(strings.HasPrefix(UserAgent, "hextrap-artifacts/"), UserAgent)
 }

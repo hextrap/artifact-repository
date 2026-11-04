@@ -28,12 +28,16 @@ import (
 	"hextrap.io/artifacts/internal/registry"
 	"hextrap.io/artifacts/internal/server"
 	"hextrap.io/artifacts/internal/tokens"
+	"hextrap.io/artifacts/internal/upstream"
 )
 
 // version is stamped in by release builds:
 //
 //	go build -ldflags "-X main.version=0.1.0"
 var version = "dev"
+
+// Upstream registries see which release is calling.
+func init() { upstream.UserAgent = "hextrap-artifacts/" + version }
 
 func versionString() string {
 	return fmt.Sprintf("hextrap-artifacts %s (%s)", version, edition.Name)

@@ -31,6 +31,10 @@ type Request struct {
 // firewall rules plug in here.
 type Gate func(ctx context.Context, req Request) error
 
+// UserAgent names this server on every upstream request (main sets the
+// release version). Maven Central throttles Go's default User-Agent.
+var UserAgent = "hextrap-artifacts/dev"
+
 type entry struct {
 	value   any
 	fetched time.Time
