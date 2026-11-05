@@ -793,19 +793,24 @@
       );
     } else if (repo.format === "cargo") {
       const index = `sparse+${BASE}/cargo/${repo.name}/index/`;
+      // Cargo refuses an authenticated registry unless a credential provider
+      // is named explicitly, even with a token configured.
+      const registry = `[registries.hextrap]\nindex = "${index}"\ncredential-provider = "cargo:token"`;
       const config = isProxy(repo)
-        ? `[source.crates-io]\nreplace-with = "hextrap"\n\n[registries.hextrap]\nindex = "${index}"`
-        : `[registries.hextrap]\nindex = "${index}"`;
+        ? `[source.crates-io]\nreplace-with = "hextrap"\n\n${registry}`
+        : registry;
       sections.push(
         panel({
           title: isProxy(repo) ? "Use for all crates.io dependencies" : "Install crates",
+          subtitle:
+            "Needs Cargo 1.74 or newer. Keep the trailing slash on the index URL (Cargo rejects it without one) and the credential-provider line (without it Cargo won't send your token).",
           body: h(
             "div",
             { class: "panel-body" },
             h("div", { class: "code-label" }, ".cargo/config.toml"),
             codeBlock(config),
-            h("div", { class: "code-label" }, "Credentials"),
-            codeBlock(`cargo login --registry hextrap ${t}\n# or: export CARGO_REGISTRIES_HEXTRAP_TOKEN=${t}`),
+            h("div", { class: "code-label" }, "Credentials (once per machine)"),
+            codeBlock(`cargo login --registry hextrap ${t}\n# or, e.g. in CI: export CARGO_REGISTRIES_HEXTRAP_TOKEN=${t}`),
             isProxy(repo) ? null : h("div", { class: "code-label" }, "Cargo.toml"),
             isProxy(repo) ? null : codeBlock(`[dependencies]\nacme-utils = { version = "1", registry = "hextrap" }`),
           ),
@@ -824,14 +829,16 @@
       sections.push(
         panel({
           title: "Use for all Go modules",
-          subtitle: "The go command still checks every module against sum.golang.org.",
+          subtitle:
+            "The go command sends credentials only over HTTPS, so this server must be reached at an https:// address. It still checks every module against sum.golang.org.",
           body: h(
             "div",
             { class: "panel-body" },
             h("div", { class: "code-label" }, "Environment"),
             codeBlock(`go env -w GOPROXY=${BASE}/go/${repo.name}`),
             h("div", { class: "code-label" }, "~/.netrc"),
-            codeBlock(`machine ${new URL(BASE).hostname} login token password ${t}`),
+            // Go matches the machine against host:port when the URL has a port.
+            codeBlock(`machine ${new URL(BASE).host} login token password ${t}`),
           ),
         }),
       );
